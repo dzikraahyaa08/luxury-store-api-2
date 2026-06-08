@@ -9,10 +9,15 @@ app.use(bodyParser.json());
 
 // --- 1. KONEKSI DATABASE ---
 const db = mysql.createConnection({
-    host: 'localhost',
-    user: 'root',
-    password: '', // Kosongkan jika pakai XAMPP standar
-    database: 'barang_branded'
+    host: process.env.DB_HOST || 'localhost',
+    user: process.env.DB_USER || 'root',
+    password: process.env.DB_PASSWORD || '', // Kosongkan jika pakai XAMPP standar
+    database: process.env.DB_NAME || 'barang_branded',
+    port: process.env.DB_PORT || 3306,
+    ssl: process.env.DB_HOST ? {
+        minVersion: 'TLSv1.2',
+        rejectUnauthorized: true
+    } : undefined
 });
 
 db.connect((err) => {
@@ -398,7 +403,10 @@ app.get('/api/statistics', (req, res) => {
 
 
 // JALANKAN SERVER
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Server API Luxury Store berjalan di http://localhost:${PORT}`);
+    console.log(`Server API Luxury Store berjalan di port ${PORT}`);
 });
+
+// Export untuk Vercel Serverless
+module.exports = app;
