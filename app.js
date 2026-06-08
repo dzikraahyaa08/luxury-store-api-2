@@ -9,15 +9,15 @@ app.use(bodyParser.json());
 
 // --- 1. KONEKSI DATABASE ---
 const db = mysql.createPool({
-    host: process.env.DB_HOST || 'localhost',
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || '', // Kosongkan jika pakai XAMPP standar
+    host: process.env.DB_HOST || 'gateway01.ap-southeast-1.prod.alicloud.tidbcloud.com',
+    user: process.env.DB_USER || '43ZuJSaQ2z8ZT5D.root',
+    password: process.env.DB_PASSWORD || 'SsLW9VElHkntPIJp', 
     database: process.env.DB_NAME || 'barang_branded',
-    port: process.env.DB_PORT || 3306,
-    ssl: process.env.DB_HOST ? {
+    port: process.env.DB_PORT || 4000,
+    ssl: {
         minVersion: 'TLSv1.2',
         rejectUnauthorized: true
-    } : undefined,
+    },
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
