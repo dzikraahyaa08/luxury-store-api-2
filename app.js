@@ -8,7 +8,7 @@ const app = express();
 app.use(bodyParser.json());
 
 // --- 1. KONEKSI DATABASE ---
-const db = mysql.createConnection({
+const db = mysql.createPool({
     host: process.env.DB_HOST || 'localhost',
     user: process.env.DB_USER || 'root',
     password: process.env.DB_PASSWORD || '', // Kosongkan jika pakai XAMPP standar
@@ -17,39 +17,34 @@ const db = mysql.createConnection({
     ssl: process.env.DB_HOST ? {
         minVersion: 'TLSv1.2',
         rejectUnauthorized: true
-    } : undefined
+    } : undefined,
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0
 });
 
-db.connect((err) => {
+// Create api_users table for authentication if it doesn't exist
+const createTableQuery = `
+    CREATE TABLE IF NOT EXISTS api_users (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        username VARCHAR(50) NOT NULL UNIQUE,
+        password VARCHAR(255) NOT NULL
+    )
+`;
+db.query(createTableQuery, (err) => {
     if (err) {
-        console.error('Gagal koneksi ke database:', err.message);
-        return;
+        console.error('Gagal membuat tabel api_users:', err.message);
+    } else {
+        console.log('Tabel api_users siap.');
+        // Insert default admin user if not exists
+        db.query('SELECT * FROM api_users WHERE username = "admin"', (err, results) => {
+            if (!err && results.length === 0) {
+                db.query('INSERT INTO api_users (username, password) VALUES ("admin", "admin123")', (err) => {
+                    if (!err) console.log('Default user (admin/admin123) berhasil dibuat.');
+                });
+            }
+        });
     }
-    console.log('Terhubung ke MariaDB (XAMPP)!');
-
-    // Create api_users table for authentication if it doesn't exist
-    const createTableQuery = `
-        CREATE TABLE IF NOT EXISTS api_users (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            username VARCHAR(50) NOT NULL UNIQUE,
-            password VARCHAR(255) NOT NULL
-        )
-    `;
-    db.query(createTableQuery, (err) => {
-        if (err) {
-            console.error('Gagal membuat tabel api_users:', err.message);
-        } else {
-            console.log('Tabel api_users siap.');
-            // Insert default admin user if not exists
-            db.query('SELECT * FROM api_users WHERE username = "admin"', (err, results) => {
-                if (!err && results.length === 0) {
-                    db.query('INSERT INTO api_users (username, password) VALUES ("admin", "admin123")', (err) => {
-                        if (!err) console.log('Default user (admin/admin123) berhasil dibuat.');
-                    });
-                }
-            });
-        }
-    });
 });
 
 
@@ -280,55 +275,80 @@ app.post('/api/orders', (req, res) => {
     const total_amount = items.reduce((sum, item) => sum + (item.quantity * item.price), 0);
 
     // Mulai transaksi database
-    db.beginTransaction((err) => {
-        if (err) return res.status(500).json({ error: err.message });
-
-        // 1. Insert ke tabel orders
-        const sqlOrder = 'INSERT INTO orders (user_id, total_amount) VALUES (?, ?)';
-        db.query(sqlOrder, [user_id, total_amount], (err, orderResult) => {
+    db.getConnection((err, conn) => {
+        if (err) return res.status(500).json({ error: 'Gagal mendapatkan koneksi database' });
+        
+        conn.beginTransaction((err) => {
             if (err) {
-                if (err.errno === 1452) {
-                    return db.rollback(() => res.status(400).json({ error: `User dengan ID ${user_id} tidak terdaftar di database. Pastikan user_id valid.` }));
-                }
-                return db.rollback(() => res.status(500).json({ error: err.message }));
+                conn.release();
+                return res.status(500).json({ error: err.message });
             }
 
-            const order_id = orderResult.insertId;
-
-            // 2. Siapkan data untuk insert order_items
-            const orderItemsData = items.map(item => [
-                order_id, 
-                item.product_id, 
-                item.quantity, 
-                item.quantity * item.price
-            ]);
-            const sqlOrderItems = 'INSERT INTO order_items (order_id, product_id, quantity, subtotal) VALUES ?';
-
-            db.query(sqlOrderItems, [orderItemsData], (err, itemsResult) => {
-                if (err) return db.rollback(() => res.status(500).json({ error: err.message }));
-
-                // 3. Update stok produk satu per satu
-                let completedUpdates = 0;
-                let hasError = false;
-
-                items.forEach(item => {
-                    const sqlUpdateStock = 'UPDATE products SET stock = stock - ? WHERE product_id = ? AND stock >= ?';
-                    db.query(sqlUpdateStock, [item.quantity, item.product_id, item.quantity], (err, updateResult) => {
-                        if (err || updateResult.affectedRows === 0) {
-                            if (!hasError) {
-                                hasError = true;
-                                return db.rollback(() => res.status(400).json({ error: `Stok tidak cukup untuk product_id ${item.product_id} atau terjadi error` }));
-                            }
+            // 1. Insert ke tabel orders
+            const sqlOrder = 'INSERT INTO orders (user_id, total_amount) VALUES (?, ?)';
+            conn.query(sqlOrder, [user_id, total_amount], (err, orderResult) => {
+                if (err) {
+                    return conn.rollback(() => {
+                        conn.release();
+                        if (err.errno === 1452) {
+                            res.status(400).json({ error: `User dengan ID ${user_id} tidak terdaftar di database. Pastikan user_id valid.` });
                         } else {
-                            completedUpdates++;
-                            if (completedUpdates === items.length && !hasError) {
-                                // Selesai, Commit transaksi
-                                db.commit((err) => {
-                                    if (err) return db.rollback(() => res.status(500).json({ error: err.message }));
-                                    res.json({ status: 'success', message: 'Transaksi Berhasil', order_id: order_id });
-                                });
-                            }
+                            res.status(500).json({ error: err.message });
                         }
+                    });
+                }
+
+                const order_id = orderResult.insertId;
+
+                // 2. Siapkan data untuk insert order_items
+                const orderItemsData = items.map(item => [
+                    order_id, 
+                    item.product_id, 
+                    item.quantity, 
+                    item.quantity * item.price
+                ]);
+                const sqlOrderItems = 'INSERT INTO order_items (order_id, product_id, quantity, subtotal) VALUES ?';
+
+                conn.query(sqlOrderItems, [orderItemsData], (err, itemsResult) => {
+                    if (err) {
+                        return conn.rollback(() => {
+                            conn.release();
+                            res.status(500).json({ error: err.message });
+                        });
+                    }
+
+                    // 3. Update stok produk satu per satu
+                    let completedUpdates = 0;
+                    let hasError = false;
+
+                    items.forEach(item => {
+                        const sqlUpdateStock = 'UPDATE products SET stock = stock - ? WHERE product_id = ? AND stock >= ?';
+                        conn.query(sqlUpdateStock, [item.quantity, item.product_id, item.quantity], (err, updateResult) => {
+                            if (err || updateResult.affectedRows === 0) {
+                                if (!hasError) {
+                                    hasError = true;
+                                    return conn.rollback(() => {
+                                        conn.release();
+                                        res.status(400).json({ error: `Stok tidak cukup untuk product_id ${item.product_id} atau terjadi error` });
+                                    });
+                                }
+                            } else {
+                                completedUpdates++;
+                                if (completedUpdates === items.length && !hasError) {
+                                    // Selesai, Commit transaksi
+                                    conn.commit((err) => {
+                                        if (err) {
+                                            return conn.rollback(() => {
+                                                conn.release();
+                                                res.status(500).json({ error: err.message });
+                                            });
+                                        }
+                                        conn.release();
+                                        res.json({ status: 'success', message: 'Transaksi Berhasil', order_id: order_id });
+                                    });
+                                }
+                            }
+                        });
                     });
                 });
             });
