@@ -1,19 +1,26 @@
 const express = require('express');
 const mysql = require('mysql2');
 const bodyParser = require('body-parser');
-
 const crypto = require('crypto');
 
 const app = express();
 app.use(bodyParser.json());
 
+// Helper untuk standarisasi format response
+const formatResponse = (code, status, message, data = null) => ({
+    meta: {
+        code: code,
+        status: status,
+        message: message
+    },
+    data: data
+});
+
 // --- 0. ROOT ENDPOINT ---
 app.get('/', (req, res) => {
-    res.json({
-        status: 'success',
-        message: 'Welcome to Luxury Store API!',
+    res.status(200).json(formatResponse(200, 'success', 'Welcome to Luxury Store API!', {
         documentation: 'Tambahkan /api/... pada URL untuk mengakses endpoint tertentu.'
-    });
+    }));
 });
 
 // --- 1. KONEKSI DATABASE ---
@@ -65,26 +72,22 @@ app.post('/api/login', (req, res) => {
     const { username, password } = req.body;
     
     if (!username || !password) {
-        return res.status(400).json({ error: 'Username dan password harus diisi' });
+        return res.status(400).json(formatResponse(400, 'error', 'Username dan password harus diisi'));
     }
 
     const sql = 'SELECT * FROM api_users WHERE username = ? AND password = ?';
     db.query(sql, [username, password], (err, results) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
         
         if (results.length === 0) {
-            return res.status(401).json({ error: 'Username atau password salah' });
+            return res.status(401).json(formatResponse(401, 'error', 'Username atau password salah'));
         }
         
         // Generate random token
         const token = crypto.randomBytes(32).toString('hex');
         activeTokens.set(token, username);
         
-        res.json({
-            status: 'success',
-            message: 'Login berhasil',
-            token: token
-        });
+        res.status(200).json(formatResponse(200, 'success', 'Login berhasil', { token }));
     });
 });
 
@@ -103,11 +106,11 @@ const authenticateToken = (req, res, next) => {
     if (!token) token = req.headers['x-auth-token'];
     
     if (!token) {
-        return res.status(401).json({ error: 'Akses ditolak: Token autentikasi tidak disediakan' });
+        return res.status(401).json(formatResponse(401, 'error', 'Akses ditolak: Token autentikasi tidak disediakan'));
     }
     
     if (!activeTokens.has(token)) {
-        return res.status(403).json({ error: 'Akses ditolak: Token tidak valid' });
+        return res.status(403).json(formatResponse(403, 'error', 'Akses ditolak: Token tidak valid'));
     }
     
     req.user = activeTokens.get(token);
@@ -129,12 +132,8 @@ app.post('/api/users/register', (req, res) => {
     const sql = 'INSERT INTO users (username, email, membership_level) VALUES (?, ?, ?)';
     
     db.query(sql, [username, email, level], (err, result) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ 
-            status: 'success', 
-            message: 'User baru berhasil didaftarkan!', 
-            user_id: result.insertId 
-        });
+        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
+        res.status(201).json(formatResponse(201, 'success', 'User baru berhasil didaftarkan!', { user_id: result.insertId }));
     });
 });
 
@@ -142,8 +141,8 @@ app.post('/api/users/register', (req, res) => {
 app.get('/api/users', (req, res) => {
     const sql = 'SELECT user_id, username, email, membership_level, created_at FROM users';
     db.query(sql, (err, results) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ status: 'success', data: results });
+        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
+        res.status(200).json(formatResponse(200, 'success', 'Data user berhasil diambil', results));
     });
 });
 
@@ -151,9 +150,9 @@ app.get('/api/users', (req, res) => {
 app.get('/api/users/:id', (req, res) => {
     const sql = 'SELECT user_id, username, email, membership_level, created_at FROM users WHERE user_id = ?';
     db.query(sql, [req.params.id], (err, results) => {
-        if (err) return res.status(500).json({ error: err.message });
-        if (results.length === 0) return res.status(404).json({ error: 'User tidak ditemukan' });
-        res.json({ status: 'success', data: results[0] });
+        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
+        if (results.length === 0) return res.status(404).json(formatResponse(404, 'error', 'User tidak ditemukan'));
+        res.status(200).json(formatResponse(200, 'success', 'Detail user berhasil diambil', results[0]));
     });
 });
 
@@ -162,8 +161,9 @@ app.put('/api/users/:id', (req, res) => {
     const { username, email, membership_level } = req.body;
     const sql = 'UPDATE users SET username = ?, email = ?, membership_level = ? WHERE user_id = ?';
     db.query(sql, [username, email, membership_level, req.params.id], (err, result) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ status: 'success', message: 'Data user berhasil diperbarui' });
+        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
+        if (result.affectedRows === 0) return res.status(404).json(formatResponse(404, 'error', 'User tidak ditemukan'));
+        res.status(200).json(formatResponse(200, 'success', 'Data user berhasil diperbarui'));
     });
 });
 
@@ -171,8 +171,9 @@ app.put('/api/users/:id', (req, res) => {
 app.delete('/api/users/:id', (req, res) => {
     const sql = 'DELETE FROM users WHERE user_id = ?';
     db.query(sql, [req.params.id], (err, result) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ status: 'success', message: 'User berhasil dihapus' });
+        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
+        if (result.affectedRows === 0) return res.status(404).json(formatResponse(404, 'error', 'User tidak ditemukan'));
+        res.status(200).json(formatResponse(200, 'success', 'User berhasil dihapus'));
     });
 });
 
@@ -182,8 +183,8 @@ app.delete('/api/users/:id', (req, res) => {
 app.get('/api/brands', (req, res) => {
     const sql = 'SELECT * FROM brands';
     db.query(sql, (err, results) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ status: 'success', data: results });
+        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
+        res.status(200).json(formatResponse(200, 'success', 'Data brand berhasil diambil', results));
     });
 });
 
@@ -192,8 +193,8 @@ app.post('/api/brands', (req, res) => {
     const { brand_name, origin_country } = req.body;
     const sql = 'INSERT INTO brands (brand_name, origin_country) VALUES (?, ?)';
     db.query(sql, [brand_name, origin_country], (err, result) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ status: 'success', message: 'Brand berhasil ditambahkan', id: result.insertId });
+        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
+        res.status(201).json(formatResponse(201, 'success', 'Brand berhasil ditambahkan', { brand_id: result.insertId }));
     });
 });
 
@@ -202,8 +203,9 @@ app.put('/api/brands/:id', (req, res) => {
     const { brand_name, origin_country } = req.body;
     const sql = 'UPDATE brands SET brand_name = ?, origin_country = ? WHERE brand_id = ?';
     db.query(sql, [brand_name, origin_country, req.params.id], (err, result) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ status: 'success', message: 'Brand berhasil diperbarui' });
+        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
+        if (result.affectedRows === 0) return res.status(404).json(formatResponse(404, 'error', 'Brand tidak ditemukan'));
+        res.status(200).json(formatResponse(200, 'success', 'Brand berhasil diperbarui'));
     });
 });
 
@@ -214,11 +216,12 @@ app.delete('/api/brands/:id', (req, res) => {
         if (err) {
             // Error 1451: Foreign Key Constraint Fails
             if (err.errno === 1451) {
-                return res.status(400).json({ error: 'Tidak dapat menghapus brand ini karena produknya sudah terikat dengan riwayat pesanan (order_items).' });
+                return res.status(400).json(formatResponse(400, 'error', 'Tidak dapat menghapus brand ini karena produknya sudah terikat dengan riwayat pesanan (order_items).'));
             }
-            return res.status(500).json({ error: err.message });
+            return res.status(500).json(formatResponse(500, 'error', err.message));
         }
-        res.json({ status: 'success', message: 'Brand berhasil dihapus' });
+        if (result.affectedRows === 0) return res.status(404).json(formatResponse(404, 'error', 'Brand tidak ditemukan'));
+        res.status(200).json(formatResponse(200, 'success', 'Brand berhasil dihapus'));
     });
 });
 
@@ -229,8 +232,8 @@ app.delete('/api/brands/:id', (req, res) => {
 app.get('/api/products', (req, res) => {
     const sql = 'SELECT p.*, b.brand_name FROM products p JOIN brands b ON p.brand_id = b.brand_id';
     db.query(sql, (err, results) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ status: 'success', data: results });
+        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
+        res.status(200).json(formatResponse(200, 'success', 'Data produk berhasil diambil', results));
     });
 });
 
@@ -239,8 +242,8 @@ app.post('/api/products', (req, res) => {
     const { brand_id, name, model_year, price, stock } = req.body;
     const sql = 'INSERT INTO products (brand_id, name, model_year, price, stock) VALUES (?, ?, ?, ?, ?)';
     db.query(sql, [brand_id, name, model_year, price, stock], (err, result) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ status: 'success', message: 'Produk berhasil dibuat', id: result.insertId });
+        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
+        res.status(201).json(formatResponse(201, 'success', 'Produk berhasil dibuat', { product_id: result.insertId }));
     });
 });
 
@@ -249,8 +252,9 @@ app.put('/api/products/:id', (req, res) => {
     const { brand_id, name, model_year, price, stock } = req.body;
     const sql = 'UPDATE products SET brand_id = ?, name = ?, model_year = ?, price = ?, stock = ? WHERE product_id = ?';
     db.query(sql, [brand_id, name, model_year, price, stock, req.params.id], (err, result) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ status: 'success', message: 'Produk berhasil diperbarui' });
+        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
+        if (result.affectedRows === 0) return res.status(404).json(formatResponse(404, 'error', 'Produk tidak ditemukan'));
+        res.status(200).json(formatResponse(200, 'success', 'Produk berhasil diperbarui'));
     });
 });
 
@@ -260,11 +264,12 @@ app.delete('/api/products/:id', (req, res) => {
     db.query(sql, [req.params.id], (err, result) => {
         if (err) {
             if (err.errno === 1451) {
-                return res.status(400).json({ error: 'Tidak dapat menghapus produk ini karena sudah terikat dengan riwayat pesanan (order_items).' });
+                return res.status(400).json(formatResponse(400, 'error', 'Tidak dapat menghapus produk ini karena sudah terikat dengan riwayat pesanan (order_items).'));
             }
-            return res.status(500).json({ error: err.message });
+            return res.status(500).json(formatResponse(500, 'error', err.message));
         }
-        res.json({ status: 'success', message: 'Produk berhasil dihapus' });
+        if (result.affectedRows === 0) return res.status(404).json(formatResponse(404, 'error', 'Produk tidak ditemukan'));
+        res.status(200).json(formatResponse(200, 'success', 'Produk berhasil dihapus'));
     });
 });
 
@@ -277,7 +282,7 @@ app.post('/api/orders', (req, res) => {
     // items format: [{ product_id: 1, quantity: 2, price: 50000000 }]
 
     if (!items || items.length === 0) {
-        return res.status(400).json({ error: 'Keranjang belanja kosong' });
+        return res.status(400).json(formatResponse(400, 'error', 'Keranjang belanja kosong'));
     }
 
     // Hitung total_amount
@@ -285,12 +290,12 @@ app.post('/api/orders', (req, res) => {
 
     // Mulai transaksi database
     db.getConnection((err, conn) => {
-        if (err) return res.status(500).json({ error: 'Gagal mendapatkan koneksi database' });
+        if (err) return res.status(500).json(formatResponse(500, 'error', 'Gagal mendapatkan koneksi database'));
         
         conn.beginTransaction((err) => {
             if (err) {
                 conn.release();
-                return res.status(500).json({ error: err.message });
+                return res.status(500).json(formatResponse(500, 'error', err.message));
             }
 
             // 1. Insert ke tabel orders
@@ -300,9 +305,9 @@ app.post('/api/orders', (req, res) => {
                     return conn.rollback(() => {
                         conn.release();
                         if (err.errno === 1452) {
-                            res.status(400).json({ error: `User dengan ID ${user_id} tidak terdaftar di database. Pastikan user_id valid.` });
+                            res.status(400).json(formatResponse(400, 'error', `User dengan ID ${user_id} tidak terdaftar di database. Pastikan user_id valid.`));
                         } else {
-                            res.status(500).json({ error: err.message });
+                            res.status(500).json(formatResponse(500, 'error', err.message));
                         }
                     });
                 }
@@ -322,7 +327,7 @@ app.post('/api/orders', (req, res) => {
                     if (err) {
                         return conn.rollback(() => {
                             conn.release();
-                            res.status(500).json({ error: err.message });
+                            res.status(500).json(formatResponse(500, 'error', err.message));
                         });
                     }
 
@@ -338,7 +343,7 @@ app.post('/api/orders', (req, res) => {
                                     hasError = true;
                                     return conn.rollback(() => {
                                         conn.release();
-                                        res.status(400).json({ error: `Stok tidak cukup untuk product_id ${item.product_id} atau terjadi error` });
+                                        res.status(400).json(formatResponse(400, 'error', `Stok tidak cukup untuk product_id ${item.product_id} atau terjadi error`));
                                     });
                                 }
                             } else {
@@ -349,11 +354,11 @@ app.post('/api/orders', (req, res) => {
                                         if (err) {
                                             return conn.rollback(() => {
                                                 conn.release();
-                                                res.status(500).json({ error: err.message });
+                                                res.status(500).json(formatResponse(500, 'error', err.message));
                                             });
                                         }
                                         conn.release();
-                                        res.json({ status: 'success', message: 'Transaksi Berhasil', order_id: order_id });
+                                        res.status(201).json(formatResponse(201, 'success', 'Transaksi Berhasil', { order_id: order_id }));
                                     });
                                 }
                             }
@@ -374,8 +379,8 @@ app.get('/api/orders', (req, res) => {
         ORDER BY o.order_date DESC
     `;
     db.query(sql, (err, results) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ status: 'success', data: results });
+        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
+        res.status(200).json(formatResponse(200, 'success', 'Riwayat pesanan berhasil diambil', results));
     });
 });
 
@@ -390,8 +395,8 @@ app.get('/api/orders/:id', (req, res) => {
     `;
     
     db.query(sqlOrder, [orderId], (err, orderResult) => {
-        if (err) return res.status(500).json({ error: err.message });
-        if (orderResult.length === 0) return res.status(404).json({ error: 'Order tidak ditemukan' });
+        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
+        if (orderResult.length === 0) return res.status(404).json(formatResponse(404, 'error', 'Order tidak ditemukan'));
 
         // Get Order Items
         const sqlItems = `
@@ -403,13 +408,13 @@ app.get('/api/orders/:id', (req, res) => {
         `;
         
         db.query(sqlItems, [orderId], (err, itemsResult) => {
-            if (err) return res.status(500).json({ error: err.message });
+            if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
             
             const responseData = {
                 ...orderResult[0],
                 items: itemsResult
             };
-            res.json({ status: 'success', data: responseData });
+            res.status(200).json(formatResponse(200, 'success', 'Detail pesanan berhasil diambil', responseData));
         });
     });
 });
@@ -425,8 +430,8 @@ app.get('/api/statistics', (req, res) => {
             (SELECT COUNT(*) FROM products WHERE stock < 5) as low_stock_items
     `;
     db.query(sql, (err, results) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ status: 'success', statistics: results[0] });
+        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
+        res.status(200).json(formatResponse(200, 'success', 'Data statistik berhasil diambil', results[0]));
     });
 });
 
