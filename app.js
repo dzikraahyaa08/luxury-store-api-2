@@ -7,6 +7,15 @@ const crypto = require('crypto');
 const app = express();
 app.use(bodyParser.json());
 
+// --- 0. ROOT ENDPOINT ---
+app.get('/', (req, res) => {
+    res.json({
+        status: 'success',
+        message: 'Welcome to Luxury Store API!',
+        documentation: 'Tambahkan /api/... pada URL untuk mengakses endpoint tertentu.'
+    });
+});
+
 // --- 1. KONEKSI DATABASE ---
 const db = mysql.createPool({
     host: process.env.DB_HOST || 'gateway01.ap-southeast-1.prod.alicloud.tidbcloud.com',
