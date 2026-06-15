@@ -64,8 +64,33 @@ db.query(createTableQuery, (err) => {
 });
 
 
-// --- 1.5. AUTENTIKASI ---
-let activeTokens = new Map(); // Menyimpan token yang valid di memori (token -> username)
+// --- 1.5. AUTENTIKASI (MENGGUNAKAN JWT UNTUK SERVERLESS) ---
+const JWT_SECRET = process.env.JWT_SECRET || 'luxury_super_secret_key_2026';
+
+function generateJWT(payload) {
+    const header = { alg: 'HS256', typ: 'JWT' };
+    const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64url');
+    // Tambahkan kedaluwarsa 24 jam
+    payload.exp = Math.floor(Date.now() / 1000) + (24 * 60 * 60);
+    const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const signature = crypto.createHmac('sha256', JWT_SECRET).update(encodedHeader + '.' + encodedPayload).digest('base64url');
+    return `${encodedHeader}.${encodedPayload}.${signature}`;
+}
+
+function verifyJWT(token) {
+    try {
+        const parts = token.split('.');
+        if (parts.length !== 3) return null;
+        const [encodedHeader, encodedPayload, signature] = parts;
+        const expectedSignature = crypto.createHmac('sha256', JWT_SECRET).update(encodedHeader + '.' + encodedPayload).digest('base64url');
+        if (signature !== expectedSignature) return null;
+        const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+        if (payload.exp && payload.exp < Date.now() / 1000) return null;
+        return payload;
+    } catch (e) {
+        return null;
+    }
+}
 
 // [POST] Endpoint Login
 app.post('/api/login', (req, res) => {
@@ -83,9 +108,8 @@ app.post('/api/login', (req, res) => {
             return res.status(401).json(formatResponse(401, 'error', 'Username atau password salah'));
         }
         
-        // Generate random token
-        const token = crypto.randomBytes(32).toString('hex');
-        activeTokens.set(token, username);
+        // Generate JWT token yang aman untuk Vercel (Stateless)
+        const token = generateJWT({ username: username });
         
         res.status(200).json(formatResponse(200, 'success', 'Login berhasil', { token }));
     });
@@ -94,7 +118,6 @@ app.post('/api/login', (req, res) => {
 // Middleware Autentikasi untuk memvalidasi token
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
-    // Mendukung format "Bearer <token>" atau hanya "<token>"
     let token = '';
     if (authHeader && authHeader.startsWith('Bearer ')) {
         token = authHeader.split(' ')[1];
@@ -109,11 +132,12 @@ const authenticateToken = (req, res, next) => {
         return res.status(401).json(formatResponse(401, 'error', 'Akses ditolak: Token autentikasi tidak disediakan'));
     }
     
-    if (!activeTokens.has(token)) {
-        return res.status(403).json(formatResponse(403, 'error', 'Akses ditolak: Token tidak valid'));
+    const payload = verifyJWT(token);
+    if (!payload) {
+        return res.status(403).json(formatResponse(403, 'error', 'Akses ditolak: Token tidak valid atau sudah kadaluarsa'));
     }
     
-    req.user = activeTokens.get(token);
+    req.user = payload.username;
     next();
 };
 
