@@ -397,7 +397,7 @@ app.post('/api/orders', (req, res) => {
 // [GET] Ambil Riwayat Pesanan
 app.get('/api/orders', (req, res) => {
     const sql = `
-        SELECT o.order_id, o.order_date, o.total_amount, u.username 
+        SELECT o.order_id, o.order_date, o.total_amount, o.status, u.username 
         FROM orders o 
         LEFT JOIN users u ON o.user_id = u.user_id
         ORDER BY o.order_date DESC
@@ -409,6 +409,30 @@ app.get('/api/orders', (req, res) => {
 });
 
 // [GET] Ambil Detail Pesanan (Termasuk Item yang Dibeli)
+
+// [PUT] Update status pesanan
+app.put('/api/orders/:id', (req, res) => {
+    const { status } = req.body;
+    const sql = 'UPDATE orders SET status = ? WHERE order_id = ?';
+    db.query(sql, [status, req.params.id], (err, result) => {
+        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
+        if (result.affectedRows === 0) return res.status(404).json(formatResponse(404, 'error', 'Pesanan tidak ditemukan'));
+        res.status(200).json(formatResponse(200, 'success', 'Status pesanan berhasil diperbarui'));
+    });
+});
+
+// [DELETE] Hapus pesanan
+app.delete('/api/orders/:id', (req, res) => {
+    db.query('DELETE FROM order_items WHERE order_id = ?', [req.params.id], (err1) => {
+        if (err1) return res.status(500).json(formatResponse(500, 'error', err1.message));
+        db.query('DELETE FROM orders WHERE order_id = ?', [req.params.id], (err2, result) => {
+            if (err2) return res.status(500).json(formatResponse(500, 'error', err2.message));
+            if (result.affectedRows === 0) return res.status(404).json(formatResponse(404, 'error', 'Pesanan tidak ditemukan'));
+            res.status(200).json(formatResponse(200, 'success', 'Pesanan berhasil dihapus'));
+        });
+    });
+});
+
 app.get('/api/orders/:id', (req, res) => {
     const orderId = req.params.id;
     
