@@ -117,26 +117,31 @@ app.post('/api/login', (req, res) => {
 
 // Middleware Autentikasi untuk memvalidasi token
 const authenticateToken = (req, res, next) => {
-    const authHeader = req.headers['authorization'];
-    let token = '';
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-        token = authHeader.split(' ')[1];
-    } else {
-        token = authHeader; // Jika dikirim tanpa Bearer
+    let token = null;
+    const authHeader = req.headers['authorization'] || req.headers['Authorization'];
+
+    if (authHeader && typeof authHeader === 'string') {
+        const bearerPrefix = authHeader.split(' ')[0].toLowerCase();
+        if (bearerPrefix === 'bearer') {
+            token = authHeader.split(' ')[1];
+        } else {
+            token = authHeader;
+        }
     }
-    
-    // Bisa juga menerima dari header custom 'x-auth-token'
+
     if (!token) token = req.headers['x-auth-token'];
-    
+    if (!token) token = req.query?.token;
+    if (!token) token = req.body?.token;
+
     if (!token) {
         return res.status(401).json(formatResponse(401, 'error', 'Akses ditolak: Token autentikasi tidak disediakan'));
     }
-    
+
     const payload = verifyJWT(token);
     if (!payload) {
         return res.status(403).json(formatResponse(403, 'error', 'Akses ditolak: Token tidak valid atau sudah kadaluarsa'));
     }
-    
+
     req.user = payload.username;
     next();
 };
