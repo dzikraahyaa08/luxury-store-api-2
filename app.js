@@ -294,6 +294,25 @@ app.get('/api/customer/orders/detail/:order_id', (req, res) => {
     });
 });
 
+// --- 1.7. PUBLIC MASTER DATA ENDPOINTS ---
+// [GET] Ambil semua produk (Public untuk Storefront)
+app.get('/api/products', (req, res) => {
+    const sql = 'SELECT p.*, b.brand_name FROM products p JOIN brands b ON p.brand_id = b.brand_id';
+    db.query(sql, (err, results) => {
+        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
+        res.status(200).json(formatResponse(200, 'success', 'Data produk berhasil diambil', results));
+    });
+});
+
+// [GET] Ambil semua brand (Public untuk Storefront)
+app.get('/api/brands', (req, res) => {
+    const sql = 'SELECT * FROM brands';
+    db.query(sql, (err, results) => {
+        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
+        res.status(200).json(formatResponse(200, 'success', 'Data brand berhasil diambil', results));
+    });
+});
+
 // Middleware Autentikasi untuk memvalidasi token
 const authenticateToken = (req, res, next) => {
     let token = null;
@@ -392,14 +411,6 @@ app.delete('/api/users/:id', (req, res) => {
 
 // --- 2.5. CRUD DATA MASTER (Brands) ---
 
-// [GET] Ambil semua brand
-app.get('/api/brands', (req, res) => {
-    const sql = 'SELECT * FROM brands';
-    db.query(sql, (err, results) => {
-        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
-        res.status(200).json(formatResponse(200, 'success', 'Data brand berhasil diambil', results));
-    });
-});
 
 // [POST] Tambah brand baru
 app.post('/api/brands', (req, res) => {
@@ -445,14 +456,6 @@ app.delete('/api/brands/:id', (req, res) => {
 
 // --- 3. CRUD DATA MASTER (Products) ---
 
-// [GET] Ambil semua produk
-app.get('/api/products', (req, res) => {
-    const sql = 'SELECT p.*, b.brand_name FROM products p JOIN brands b ON p.brand_id = b.brand_id';
-    db.query(sql, (err, results) => {
-        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
-        res.status(200).json(formatResponse(200, 'success', 'Data produk berhasil diambil', results));
-    });
-});
 
 // [POST] Tambah produk baru
 app.post('/api/products', (req, res) => {
