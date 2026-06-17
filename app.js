@@ -115,6 +115,185 @@ app.post('/api/login', (req, res) => {
     });
 });
 
+// --- 1.6. CUSTOMER PUBLIC ENDPOINTS ---
+
+// [POST] Registrasi customer baru (Public)
+app.post('/api/customer/register', (req, res) => {
+    const { username, email, membership_level } = req.body;
+    if (!username || !email) {
+        return res.status(400).json(formatResponse(400, 'error', 'Username dan Email harus diisi'));
+    }
+    const level = membership_level || 'Silver'; 
+
+    const sql = 'INSERT INTO users (username, email, membership_level) VALUES (?, ?, ?)';
+    db.query(sql, [username, email, level], (err, result) => {
+        if (err) {
+            if (err.errno === 1062) {
+                return res.status(400).json(formatResponse(400, 'error', 'Username atau Email sudah terdaftar'));
+            }
+            return res.status(500).json(formatResponse(500, 'error', err.message));
+        }
+        res.status(201).json(formatResponse(201, 'success', 'Registrasi berhasil!', { 
+            user_id: result.insertId,
+            username,
+            email,
+            membership_level: level
+        }));
+    });
+});
+
+// [POST] Login customer (Public)
+app.post('/api/customer/login', (req, res) => {
+    const { email_or_username } = req.body;
+    if (!email_or_username) {
+        return res.status(400).json(formatResponse(400, 'error', 'Email atau Username harus diisi'));
+    }
+    const sql = 'SELECT * FROM users WHERE email = ? OR username = ?';
+    db.query(sql, [email_or_username, email_or_username], (err, results) => {
+        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
+        if (results.length === 0) {
+            return res.status(404).json(formatResponse(404, 'error', 'Akun customer tidak ditemukan'));
+        }
+        res.status(200).json(formatResponse(200, 'success', 'Login customer berhasil', results[0]));
+    });
+});
+
+// [POST] Buat Pesanan Baru oleh Customer (Public)
+app.post('/api/customer/orders', (req, res) => {
+    const { user_id, items } = req.body; 
+
+    if (!items || items.length === 0) {
+        return res.status(400).json(formatResponse(400, 'error', 'Keranjang belanja kosong'));
+    }
+
+    const total_amount = items.reduce((sum, item) => sum + (item.quantity * item.price), 0);
+
+    db.getConnection((err, conn) => {
+        if (err) return res.status(500).json(formatResponse(500, 'error', 'Gagal mendapatkan koneksi database'));
+        
+        conn.beginTransaction((err) => {
+            if (err) {
+                conn.release();
+                return res.status(500).json(formatResponse(500, 'error', err.message));
+            }
+
+            const sqlOrder = 'INSERT INTO orders (user_id, total_amount) VALUES (?, ?)';
+            conn.query(sqlOrder, [user_id || null, total_amount], (err, orderResult) => {
+                if (err) {
+                    return conn.rollback(() => {
+                        conn.release();
+                        if (err.errno === 1452) {
+                            res.status(400).json(formatResponse(400, 'error', `User dengan ID ${user_id} tidak terdaftar di database.`));
+                        } else {
+                            res.status(500).json(formatResponse(500, 'error', err.message));
+                        }
+                    });
+                }
+
+                const order_id = orderResult.insertId;
+
+                const orderItemsData = items.map(item => [
+                    order_id, 
+                    item.product_id, 
+                    item.quantity, 
+                    item.quantity * item.price
+                ]);
+                const sqlOrderItems = 'INSERT INTO order_items (order_id, product_id, quantity, subtotal) VALUES ?';
+
+                conn.query(sqlOrderItems, [orderItemsData], (err, itemsResult) => {
+                    if (err) {
+                        return conn.rollback(() => {
+                            conn.release();
+                            res.status(500).json(formatResponse(500, 'error', err.message));
+                        });
+                    }
+
+                    let completedUpdates = 0;
+                    let hasError = false;
+
+                    items.forEach(item => {
+                        const sqlUpdateStock = 'UPDATE products SET stock = stock - ? WHERE product_id = ? AND stock >= ?';
+                        conn.query(sqlUpdateStock, [item.quantity, item.product_id, item.quantity], (err, updateResult) => {
+                            if (err || updateResult.affectedRows === 0) {
+                                if (!hasError) {
+                                    hasError = true;
+                                    return conn.rollback(() => {
+                                        conn.release();
+                                        res.status(400).json(formatResponse(400, 'error', `Stok tidak cukup untuk product_id ${item.product_id} atau terjadi error`));
+                                    });
+                                }
+                            } else {
+                                completedUpdates++;
+                                if (completedUpdates === items.length && !hasError) {
+                                    conn.commit((err) => {
+                                        if (err) {
+                                            return conn.rollback(() => {
+                                                conn.release();
+                                                res.status(500).json(formatResponse(500, 'error', err.message));
+                                            });
+                                        }
+                                        conn.release();
+                                        res.status(201).json(formatResponse(201, 'success', 'Transaksi Berhasil', { order_id: order_id }));
+                                    });
+                                }
+                            }
+                        });
+                    });
+                });
+            });
+        });
+    });
+});
+
+// [GET] Ambil Riwayat Pesanan Customer (Public)
+app.get('/api/customer/orders/:user_id', (req, res) => {
+    const userId = req.params.user_id;
+    const sql = `
+        SELECT o.order_id, o.order_date, o.total_amount, o.status 
+        FROM orders o 
+        WHERE o.user_id = ?
+        ORDER BY o.order_date DESC
+    `;
+    db.query(sql, [userId], (err, results) => {
+        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
+        res.status(200).json(formatResponse(200, 'success', 'Riwayat pesanan berhasil diambil', results));
+    });
+});
+
+// [GET] Ambil Detail Pesanan Customer (Public)
+app.get('/api/customer/orders/detail/:order_id', (req, res) => {
+    const orderId = req.params.order_id;
+    
+    const sqlOrder = `
+        SELECT o.order_id, o.order_date, o.total_amount, o.status 
+        FROM orders o 
+        WHERE o.order_id = ?
+    `;
+    
+    db.query(sqlOrder, [orderId], (err, orderResult) => {
+        if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
+        if (orderResult.length === 0) return res.status(404).json(formatResponse(404, 'error', 'Order tidak ditemukan'));
+
+        const sqlItems = `
+            SELECT oi.quantity, oi.subtotal, p.name, p.price, b.brand_name
+            FROM order_items oi
+            JOIN products p ON oi.product_id = p.product_id
+            JOIN brands b ON p.brand_id = b.brand_id
+            WHERE oi.order_id = ?
+        `;
+        
+        db.query(sqlItems, [orderId], (err, itemsResult) => {
+            if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
+            
+            const responseData = {
+                ...orderResult[0],
+                items: itemsResult
+            };
+            res.status(200).json(formatResponse(200, 'success', 'Detail pesanan berhasil diambil', responseData));
+        });
+    });
+});
+
 // Middleware Autentikasi untuk memvalidasi token
 const authenticateToken = (req, res, next) => {
     let token = null;
@@ -192,7 +371,12 @@ app.put('/api/users/:id', (req, res) => {
     db.query(sql, [username, email, membership_level, req.params.id], (err, result) => {
         if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
         if (result.affectedRows === 0) return res.status(404).json(formatResponse(404, 'error', 'User tidak ditemukan'));
-        res.status(200).json(formatResponse(200, 'success', 'Data user berhasil diperbarui'));
+        res.status(200).json(formatResponse(200, 'success', 'Data user berhasil diperbarui', {
+            user_id: parseInt(req.params.id),
+            username,
+            email,
+            membership_level
+        }));
     });
 });
 
@@ -234,7 +418,11 @@ app.put('/api/brands/:id', (req, res) => {
     db.query(sql, [brand_name, origin_country, req.params.id], (err, result) => {
         if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
         if (result.affectedRows === 0) return res.status(404).json(formatResponse(404, 'error', 'Brand tidak ditemukan'));
-        res.status(200).json(formatResponse(200, 'success', 'Brand berhasil diperbarui'));
+        res.status(200).json(formatResponse(200, 'success', 'Brand berhasil diperbarui', {
+            brand_id: parseInt(req.params.id),
+            brand_name,
+            origin_country
+        }));
     });
 });
 
@@ -283,7 +471,14 @@ app.put('/api/products/:id', (req, res) => {
     db.query(sql, [brand_id, name, model_year, price, stock, req.params.id], (err, result) => {
         if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
         if (result.affectedRows === 0) return res.status(404).json(formatResponse(404, 'error', 'Produk tidak ditemukan'));
-        res.status(200).json(formatResponse(200, 'success', 'Produk berhasil diperbarui'));
+        res.status(200).json(formatResponse(200, 'success', 'Produk berhasil diperbarui', {
+            product_id: parseInt(req.params.id),
+            brand_id,
+            name,
+            model_year,
+            price,
+            stock
+        }));
     });
 });
 
@@ -422,7 +617,10 @@ app.put('/api/orders/:id', (req, res) => {
     db.query(sql, [status, req.params.id], (err, result) => {
         if (err) return res.status(500).json(formatResponse(500, 'error', err.message));
         if (result.affectedRows === 0) return res.status(404).json(formatResponse(404, 'error', 'Pesanan tidak ditemukan'));
-        res.status(200).json(formatResponse(200, 'success', 'Status pesanan berhasil diperbarui'));
+        res.status(200).json(formatResponse(200, 'success', 'Status pesanan berhasil diperbarui', {
+            order_id: parseInt(req.params.id),
+            status
+        }));
     });
 });
 
